@@ -5,7 +5,7 @@ A Vercel compatible dispatcher app for **one or more bulk PDFs with one work ord
 ## What works
 
 - Multiple bulk PDF upload and editable WO number, street, city, state, ZIP fields; malformed and duplicate work-order numbers across files block routing. Further file selections append to the batch. Files can be removed individually; adding or removing resets address review and routes. Once any route has been emailed, start a new batch to select files again.
-- Rows with duplicate work-order numbers have **Remove duplicate**. The removed row stays visible in a restore list and is excluded from routing and packets. Restoring it recalculates duplicate and mixed-date checks. Confirm which copy is correct before removing one; original PDFs are never changed.
+- Rows with duplicate work-order numbers have **Remove duplicate**. The removed row stays visible in a restore list and is excluded from routing and packets. Restoring it recalculates duplicate checks. Confirm which copy is correct before removing one; original PDFs are never changed.
 - Dispatchers can correct a field in the review table and recheck just that address without repeating the entire batch lookup.
 - Blank pages are skipped while each order retains its source filename and original page number. The provided sample contains 10 work orders and a blank 11th page. Packets copy the original pages from the appropriate input PDF in the route's reviewed order.
 - Address checks through the public Census batch geocoder. Unit/floor stays on the original page but is removed from the lookup address.
@@ -65,7 +65,7 @@ Each packet has a 3.5 MB base64 request cap to stay below Vercel's function payl
 
 ## Routing assumptions
 
-- Appointment Date is displayed but not treated as a promised appointment window. Confirm its business meaning before enforcing time windows.
+- Appointment Date is displayed but not treated as a promised appointment window. Orders with different dates can share a batch or route, and dispatch sets the final assignment and sequence. Such packets use `VariousDates` in the filename and "various dates" in the email subject. Confirm appointment details before sending.
 - Routes are open paths: travel to the first stop, the last stop back home, service duration, traffic, shifts, and installer territories are not modeled. A route with 14–16 jobs may still be impossible in one workday.
 - The route review includes Google Maps direction links in chunks. Those links are for human review and may recalculate their own travel sequence or differ from the displayed estimate.
 - Address checks can fail even for real addresses. An unmatched order needs a selected planning location before routes can be built. A ZIP-area estimate or dispatch pin is a planning aid, not proof of the service address; confirm the actual destination and directions, then approve its route assignment before emailing. Downloads can include unreviewed locations and are marked **NOT REVIEWED** on the route sheet.

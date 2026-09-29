@@ -119,9 +119,13 @@ function App() {
     const link = document.createElement('a'); link.href = url; link.download = name; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   }
+  const routeDate = route => {
+    const dates = route.jobs.map(j => j.appointment?.split(' ')[0] || '');
+    return dates.length && dates[0] && dates.every(date => date === dates[0]) ? dates[0] : null;
+  };
   const filename = (route, installer) => {
-    const date = route.jobs[0]?.appointment.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-    const day = date ? `${date[3]}-${date[1].padStart(2, '0')}-${date[2].padStart(2, '0')}` : new Date().toISOString().slice(0, 10);
+    const date = routeDate(route)?.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    const day = date ? `${date[3]}-${date[1].padStart(2, '0')}-${date[2].padStart(2, '0')}` : 'VariousDates';
     return `${installer.name.trim().replace(/[^\w-]+/g, '_')}_${day}_${route.jobs.length}_WorkOrders.pdf`;
   };
   function mapLinks(route) {
@@ -170,7 +174,7 @@ function App() {
     try {
       const pdf = await packet(sources, route);
       const base64 = btoa(Array.from({ length: Math.ceil(pdf.length / 8192) }, (_, k) => String.fromCharCode(...pdf.slice(k * 8192, (k + 1) * 8192))).join(''));
-      const date = route.jobs[0]?.appointment.split(' ')[0] || new Date().toLocaleDateString();
+      const date = routeDate(route) || 'various dates';
       const name = filename(route, installer);
       await call('send', { email: installer.email.trim(), filename: name, contentBase64: base64, dispatchId: `${dispatchId}-${i + 1}`, orderIds: route.jobs.map(j => j.id), subject: `Installation work orders – ${date} – ${route.jobs.length} stops`, body: `Hello ${installer.name.trim()},\n\nAttached are your ${route.jobs.length} assigned work orders in recommended stop order.\n\nWork orders: ${route.jobs.map(j => j.id).join(', ')}\n\nPlease contact dispatch if an assignment needs to change.` });
       setSent(old => ({ ...old, [i]: true })); setStatus(`Email flow accepted route ${i + 1} for ${installer.email}.`);

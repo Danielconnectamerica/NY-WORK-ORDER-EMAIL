@@ -10,12 +10,12 @@ describe('work order extraction', () => {
     expect(safeStreet('11530 114TH PL FL 1')).toBe('11530 114TH PL');
   });
 
-  it('clears duplicate errors when one copy is removed and restores them on undo', () => {
+  it('clears duplicate errors when one copy is removed and allows mixed appointment dates', () => {
     const jobs = [1, 2].map(page => ({ page, id: '101', street: 'Main St', city: 'Brooklyn', state: 'NY', zip: '11206', appointment: '9/29/2026 9:00 AM' }));
     expect(validateBatchJobs(jobs).every(j => j.errors.includes('Duplicate work order number'))).toBe(true);
     expect(validateBatchJobs(jobs.slice(0, 1))[0].errors).toEqual([]);
     const differentDate = { ...jobs[1], id: '102', appointment: '9/30/2026 9:00 AM' };
-    expect(validateBatchJobs([jobs[0], differentDate])[0].errors).toContain('Mixed appointment dates in upload');
+    expect(validateBatchJobs([jobs[0], differentDate]).every(j => j.errors.length === 0)).toBe(true);
     expect(validateBatchJobs([jobs[0]])[0].errors).toEqual([]);
   });
 

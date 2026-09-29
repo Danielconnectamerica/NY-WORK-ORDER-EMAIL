@@ -24,14 +24,12 @@ export function parseWorkOrder(text, page) {
 export function validateBatchJobs(jobs) {
   const counts = new Map();
   for (const j of jobs) if (j.id?.trim()) counts.set(j.id.trim(), (counts.get(j.id.trim()) || 0) + 1);
-  const dates = new Set(jobs.map(j => j.appointment?.split(' ')[0]).filter(Boolean));
   return jobs.map(j => {
     const errors = [];
     if (!j.id?.trim()) errors.push('Missing work order number');
     if (!j.street?.trim() || !j.city?.trim() || !j.zip?.trim() || !j.state?.trim()) errors.push('Incomplete service address');
     if (j.state && j.state !== 'NY') errors.push('Outside NY');
     if (j.id?.trim() && counts.get(j.id.trim()) > 1) errors.push('Duplicate work order number');
-    if (dates.size > 1) errors.push('Mixed appointment dates in upload');
     return { ...j, errors };
   });
 }
