@@ -21,6 +21,12 @@ export function groupByAppointmentDate(jobs) {
   return [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([dateKey, dateJobs]) => ({ dateKey, jobs: dateJobs }));
 }
 
+export function partitionForDispatch(jobs, dispatchDate) {
+  const selected = [], other = [];
+  for (const job of jobs) (dispatchDate && appointmentDate(job) === dispatchDate ? selected : other).push(job);
+  return { selected, other };
+}
+
 export function buildDateRoutes(jobs, installerCount, matrix, { spreadShort = false } = {}) {
   if (!Number.isInteger(installerCount) || installerCount < 1 || installerCount > 100) throw new Error('Add at least one installer');
   if (matrix.length !== jobs.length || matrix.some(row => row.length !== jobs.length || row.some(v => !Number.isFinite(v) || v < 0))) throw new Error('Invalid travel matrix');

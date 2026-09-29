@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { parseWorkOrder, safeStreet, packet, readPdfs, validateBatchJobs } from '../src/pdf.js';
-import { feasibleCounts, optimize, approximateMatrix, zipEstimate, appointmentDate, groupByAppointmentDate, buildDateRoutes } from '../src/routing.js';
+import { parseWorkOrder, safeStreet, packet, otherDatesPdf, readPdfs, validateBatchJobs } from '../src/pdf.js';
+import { feasibleCounts, optimize, approximateMatrix, zipEstimate, appointmentDate, groupByAppointmentDate, partitionForDispatch, buildDateRoutes } from '../src/routing.js';
 
 describe('work order extraction', () => {
   it('reads labeled fields and rejects incomplete pages', () => {
@@ -61,6 +61,14 @@ describe('work order extraction', () => {
     expect(await (await futureDocument.getPage(1)).getTextContent().then(content => content.items.map(x => x.str).join(' '))).toContain('2026-10-01');
     expect((await (await futureDocument.getPage(2)).getTextContent()).items.map(x => x.str).join(' ')).toContain('Second Street');
     await futureDocument.destroy();
+    const { selected, other } = partitionForDispatch(result.jobs, '2026-09-29');
+    expect(selected.map(j => j.id)).toEqual(['101']);
+    expect(other.map(j => j.id)).toEqual(['102']);
+    const heldPdf = await otherDatesPdf(result.sources, other);
+    const heldDocument = await legacy.getDocument({ data: heldPdf }).promise;
+    expect(heldDocument.numPages).toBe(1);
+    expect((await (await heldDocument.getPage(1)).getTextContent()).items.map(x => x.str).join(' ')).toContain('Second Street');
+    await heldDocument.destroy();
     const duplicate = await readPdfs([files[0], await makeFile('duplicate.pdf', '101', 'Another Street')]);
     expect(duplicate.jobs.every(j => j.errors.includes('Duplicate work order number'))).toBe(true);
   });
@@ -108,6 +116,29 @@ describe('route constraints and packet isolation', () => {
     const futurePacket = await packet(await source.save(), routes[3]);
     expect((await PDFDocument.load(futurePacket)).getPageCount()).toBe(2);
     expect(appointmentDate(routes[3].jobs[0])).toBe('2026-10-01');
+  });
+
+  it('keeps every nonselected date in one holding PDF in original page order', async () => {
+    const { PDFDocument, StandardFonts } = await import('pdf-lib');
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const input = await PDFDocument.create();
+    const font = await input.embedFont(StandardFonts.Helvetica);
+    for (const [index, date] of ['9/29/2026', '10/1/2026', '9/30/2026'].entries()) {
+      const page = input.addPage([612, 792]);
+      page.drawText(`WO ${index + 1}: ${date}`, { x: 40, y: 700, font, size: 12 });
+    }
+    const jobs = ['9/29/2026', '10/1/2026', '9/30/2026'].map((date, i) => ({ page: i + 1, id: String(i + 1), appointment: `${date} 9:00 AM` }));
+    const { selected, other } = partitionForDispatch(jobs, '2026-09-29');
+    expect(selected.map(j => j.id)).toEqual(['1']);
+    expect(other.map(j => j.id)).toEqual(['2', '3']);
+    expect(partitionForDispatch([...jobs, { id: '4', appointment: '' }], '2026-09-29').other.map(j => j.id)).toEqual(['2', '3', '4']);
+    const held = await otherDatesPdf(await input.save(), other);
+    const document = await pdfjs.getDocument({ data: held }).promise;
+    expect(document.numPages).toBe(2);
+    const pageText = async n => (await (await document.getPage(n)).getTextContent()).items.map(x => x.str).join(' ');
+    expect(await pageText(1)).toContain('WO 2: 10/1/2026');
+    expect(await pageText(2)).toContain('WO 3: 9/30/2026');
+    await document.destroy();
   });
 
   it('requires a real appointment date and enough installers for each individual day', () => {

@@ -91,7 +91,6 @@ export async function readPdfs(files, progress = () => {}) {
 
 export async function packet(sources, route) {
   const inputs = Array.isArray(sources) ? sources : [sources];
-  const documents = new Map();
   const output = await PDFDocument.create();
   const cover = output.addPage([612, 792]);
   const font = await output.embedFont(StandardFonts.Helvetica);
@@ -110,13 +109,26 @@ export async function packet(sources, route) {
     cover.drawText(plain(`${job.street}${job.street2 ? ` ${job.street2}` : ''}, ${job.city}, ${job.state} ${job.zip}`).slice(0, 110), { x: 54, y: y - 14, size: 9, font, color: ink });
     y -= 38;
   }
-  for (const job of route.jobs) {
+  await copyWorkOrderPages(output, inputs, route.jobs);
+  return output.save();
+}
+
+async function copyWorkOrderPages(output, inputs, jobs) {
+  const documents = new Map();
+  for (const job of jobs) {
     const sourceIndex = job.sourceIndex ?? 0;
     if (!inputs[sourceIndex]) throw new Error(`Missing source PDF for work order ${job.id || job.page}`);
     if (!documents.has(sourceIndex)) documents.set(sourceIndex, await PDFDocument.load(inputs[sourceIndex]));
     const [page] = await output.copyPages(documents.get(sourceIndex), [(job.sourcePage ?? job.page) - 1]);
     output.addPage(page);
   }
+}
+
+// A holding PDF of the untouched original order pages, with no installer route sheet.
+export async function otherDatesPdf(sources, jobs) {
+  if (!jobs.length) throw new Error('No other-date work orders to save');
+  const output = await PDFDocument.create();
+  await copyWorkOrderPages(output, Array.isArray(sources) ? sources : [sources], jobs);
   return output.save();
 }
 
