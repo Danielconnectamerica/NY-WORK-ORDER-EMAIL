@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseWorkOrder, safeStreet, packet, readPdfs, validateBatchJobs } from '../src/pdf.js';
-import { feasibleCounts, optimize, approximateMatrix, zipEstimate } from '../src/routing.js';
+import { feasibleCounts, optimize, approximateMatrix, zipEstimate, appointmentDate, groupByAppointmentDate, buildDateRoutes } from '../src/routing.js';
 
 describe('work order extraction', () => {
   it('reads labeled fields and rejects incomplete pages', () => {
@@ -23,13 +23,13 @@ describe('work order extraction', () => {
     const { PDFDocument, StandardFonts } = await import('pdf-lib');
     const pdfjs = await import('pdfjs-dist');
     pdfjs.GlobalWorkerOptions.workerSrc = new URL('../node_modules/pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).href;
-    const makeFile = async (name, id, street, blank = false) => {
+    const makeFile = async (name, id, street, blank = false, date = '9/29/2026') => {
       const doc = await PDFDocument.create();
       const font = await doc.embedFont(StandardFonts.Helvetica);
       const page = doc.addPage([612, 792]);
       [
         `Work Order: ${id}`,
-        'Appointment Date: 9/29/2026 9:00:00 AM',
+        `Appointment Date: ${date} 9:00:00 AM`,
         `Street 1: ${street}`,
         'City: Brooklyn      State: NY     Zip Code: 11206'
       ].forEach((line, i) => page.drawText(line, { x: 40, y: 720 - i * 25, font, size: 12 }));
@@ -37,7 +37,7 @@ describe('work order extraction', () => {
       const bytes = await doc.save();
       return { name, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
     };
-    const files = [await makeFile('first.pdf', '101', 'First Street', true), await makeFile('second.pdf', '102', 'Second Street')];
+    const files = [await makeFile('first.pdf', '101', 'First Street', true), await makeFile('second.pdf', '102', 'Second Street', false, '10/1/2026')];
     const result = await readPdfs(files);
     expect(result.jobs.map(j => [j.id, j.page, j.sourceIndex, j.sourcePage, j.sourceName])).toEqual([
       ['101', 1, 0, 1, 'first.pdf'], ['102', 3, 1, 1, 'second.pdf']
@@ -50,6 +50,17 @@ describe('work order extraction', () => {
     expect(await pageText(2)).toContain('Second Street');
     expect(await pageText(3)).toContain('First Street');
     await document.destroy();
+    const routedJobs = result.jobs.map((job, i) => ({ ...job, geo: { lat: 40.7 + i * .01, lon: -73.9 } }));
+    const datedRoutes = buildDateRoutes(routedJobs, 1, approximateMatrix(routedJobs));
+    expect(datedRoutes.map(r => [r.dateKey, r.jobs.map(j => j.id)])).toEqual([
+      ['2026-09-29', ['101']], ['2026-10-01', ['102']]
+    ]);
+    const futurePdf = await packet(result.sources, datedRoutes[1]);
+    const futureDocument = await legacy.getDocument({ data: futurePdf }).promise;
+    expect(futureDocument.numPages).toBe(2);
+    expect(await (await futureDocument.getPage(1)).getTextContent().then(content => content.items.map(x => x.str).join(' '))).toContain('2026-10-01');
+    expect((await (await futureDocument.getPage(2)).getTextContent()).items.map(x => x.str).join(' ')).toContain('Second Street');
+    await futureDocument.destroy();
     const duplicate = await readPdfs([files[0], await makeFile('duplicate.pdf', '101', 'Another Street')]);
     expect(duplicate.jobs.every(j => j.errors.includes('Duplicate work order number'))).toBe(true);
   });
@@ -73,6 +84,38 @@ describe('route constraints and packet isolation', () => {
     const routes = optimize(jobs, 2, approximateMatrix(jobs));
     expect(routes.map(r => r.jobs.length)).toEqual([15, 15]);
     expect(new Set(routes.flatMap(r => r.jobs.map(j => j.page))).size).toBe(30);
+  });
+
+  it('splits mixed PDFs by actual appointment day, even for one future order', async () => {
+    const jobs = Array.from({ length: 31 }, (_, i) => ({
+      page: i + 1, id: String(i + 1),
+      appointment: i === 2 ? '10/1/2026 9:00 AM' : i === 9 ? '9/30/2026 11:00 AM' : '9/29/2026 8:00 AM',
+      geo: { lat: 40.6 + i * .001, lon: -73.9 + i * .001 }
+    }));
+    expect(appointmentDate(jobs[2])).toBe('2026-10-01');
+    expect(groupByAppointmentDate(jobs).map(g => [g.dateKey, g.jobs.length])).toEqual([
+      ['2026-09-29', 29], ['2026-09-30', 1], ['2026-10-01', 1]
+    ]);
+    const routes = buildDateRoutes(jobs, 2, approximateMatrix(jobs));
+    expect(routes.map(r => [r.dateKey, r.jobs.length])).toEqual([
+      ['2026-09-29', 15], ['2026-09-29', 14], ['2026-09-30', 1], ['2026-10-01', 1]
+    ]);
+    expect(routes.every(r => r.jobs.every(j => appointmentDate(j) === r.dateKey))).toBe(true);
+    expect(routes.flatMap(r => r.jobs.map(j => j.id)).sort()).toEqual(jobs.map(j => j.id).sort());
+    const { PDFDocument } = await import('pdf-lib');
+    const source = await PDFDocument.create();
+    for (const job of jobs) source.addPage([612, 792]);
+    const futurePacket = await packet(await source.save(), routes[3]);
+    expect((await PDFDocument.load(futurePacket)).getPageCount()).toBe(2);
+    expect(appointmentDate(routes[3].jobs[0])).toBe('2026-10-01');
+  });
+
+  it('requires a real appointment date and enough installers for each individual day', () => {
+    expect(appointmentDate({ appointment: '2/30/2026 9:00 AM' })).toBeNull();
+    const job = i => ({ page: i + 1, id: String(i + 1), appointment: '9/29/2026 9:00 AM', geo: { lat: 40.7, lon: -73.9 } });
+    const jobs = Array.from({ length: 17 }, (_, i) => job(i));
+    expect(() => buildDateRoutes(jobs, 1, approximateMatrix(jobs))).toThrow(/Add installers for this date/);
+    expect(validateBatchJobs([{ ...job(0), appointment: '' }])[0].errors).toContain('Missing or invalid appointment date');
   });
 
   it('merges only the assigned source pages and preserves their order', async () => {

@@ -1,5 +1,39 @@
 import nyZipCentroids from './ny-zip-centroids.json';
 
+export function appointmentDate(job) {
+  const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s|$)/.exec((job.appointment || '').trim());
+  if (!match) return null;
+  const [, rawMonth, rawDay, rawYear] = match;
+  const month = Number(rawMonth), day = Number(rawDay), year = Number(rawYear);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) return null;
+  return `${rawYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+export function groupByAppointmentDate(jobs) {
+  const groups = new Map();
+  for (const job of jobs) {
+    const dateKey = appointmentDate(job);
+    if (!dateKey) throw new Error(`WO ${job.id || job.page}: enter a valid Appointment Date (M/D/YYYY) before routing`);
+    if (!groups.has(dateKey)) groups.set(dateKey, []);
+    groups.get(dateKey).push(job);
+  }
+  return [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([dateKey, dateJobs]) => ({ dateKey, jobs: dateJobs }));
+}
+
+export function buildDateRoutes(jobs, installerCount, matrix, { spreadShort = false } = {}) {
+  if (!Number.isInteger(installerCount) || installerCount < 1 || installerCount > 100) throw new Error('Add at least one installer');
+  if (matrix.length !== jobs.length || matrix.some(row => row.length !== jobs.length || row.some(v => !Number.isFinite(v) || v < 0))) throw new Error('Invalid travel matrix');
+  const positions = new Map(jobs.map((job, index) => [job, index]));
+  return groupByAppointmentDate(jobs).flatMap(({ dateKey, jobs: dateJobs }) => {
+    if (dateJobs.length > 16 * installerCount) throw new Error(`${dateKey}: ${dateJobs.length} work orders exceed ${installerCount} installers at 16 stops each. Add installers for this date.`);
+    const count = spreadShort ? Math.min(installerCount, dateJobs.length) : Math.ceil(dateJobs.length / 16);
+    const indices = dateJobs.map(job => positions.get(job));
+    const subset = indices.map(i => indices.map(j => matrix[i][j]));
+    return optimize(dateJobs, count, subset, { allowShort: true }).map((route, installerIndex) => ({ ...route, dateKey, installerIndex }));
+  }).map((route, index) => ({ ...route, number: index + 1 }));
+}
+
 export function feasibleCounts(n, count, min = 14, max = 16) {
   if (!Number.isInteger(count) || count < 1 || count > 100) return null;
   if (n < min * count || n > max * count) return null;

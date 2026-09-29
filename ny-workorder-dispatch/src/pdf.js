@@ -1,6 +1,7 @@
 import * as pdfjs from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { appointmentDate } from './routing.js';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -27,6 +28,7 @@ export function validateBatchJobs(jobs) {
   return jobs.map(j => {
     const errors = [];
     if (!j.id?.trim()) errors.push('Missing work order number');
+    if (!appointmentDate(j)) errors.push('Missing or invalid appointment date');
     if (!j.street?.trim() || !j.city?.trim() || !j.zip?.trim() || !j.state?.trim()) errors.push('Incomplete service address');
     if (j.state && j.state !== 'NY') errors.push('Outside NY');
     if (j.id?.trim() && counts.get(j.id.trim()) > 1) errors.push('Duplicate work order number');
@@ -97,7 +99,7 @@ export async function packet(sources, route) {
   const ink = rgb(0.10, 0.16, 0.20);
   const plain = s => String(s ?? '').replace(/[^\x20-\x7e]/g, '?');
   cover.drawText('INSTALLER ROUTE SHEET', { x: 38, y: 744, size: 17, font: bold, color: ink });
-  cover.drawText(`${route.jobs.length} stops - follow this order`, { x: 38, y: 721, size: 11, font, color: ink });
+  cover.drawText(`${route.dateKey || appointmentDate(route.jobs[0]) || 'Date unconfirmed'} - ${route.jobs.length} stops - follow this order`, { x: 38, y: 721, size: 11, font, color: ink });
   cover.drawText('Addresses marked CORRECTED were edited by dispatch; original forms follow this sheet.', { x: 38, y: 700, size: 8.5, font, color: ink });
   cover.drawText('APPROX LOCATION uses a ZIP area or dispatch pin; confirm the actual service address.', { x: 38, y: 686, size: 8.5, font, color: ink });
   let y = 661;
