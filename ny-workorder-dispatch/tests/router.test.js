@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseWorkOrder, safeStreet, packet, readPdfs } from '../src/pdf.js';
+import { parseWorkOrder, safeStreet, packet, readPdfs, validateBatchJobs } from '../src/pdf.js';
 import { feasibleCounts, optimize, approximateMatrix, zipEstimate } from '../src/routing.js';
 
 describe('work order extraction', () => {
@@ -8,6 +8,15 @@ describe('work order extraction', () => {
     expect(parseWorkOrder(text, 1)).toMatchObject({ id: '13702621', street: '556 Flushing Ave Apt 3A', city: 'Brooklyn', zip: '11206', errors: [] });
     expect(parseWorkOrder('Work Order: 1', 2).errors).toContain('Incomplete service address');
     expect(safeStreet('11530 114TH PL FL 1')).toBe('11530 114TH PL');
+  });
+
+  it('clears duplicate errors when one copy is removed and restores them on undo', () => {
+    const jobs = [1, 2].map(page => ({ page, id: '101', street: 'Main St', city: 'Brooklyn', state: 'NY', zip: '11206', appointment: '9/29/2026 9:00 AM' }));
+    expect(validateBatchJobs(jobs).every(j => j.errors.includes('Duplicate work order number'))).toBe(true);
+    expect(validateBatchJobs(jobs.slice(0, 1))[0].errors).toEqual([]);
+    const differentDate = { ...jobs[1], id: '102', appointment: '9/30/2026 9:00 AM' };
+    expect(validateBatchJobs([jobs[0], differentDate])[0].errors).toContain('Mixed appointment dates in upload');
+    expect(validateBatchJobs([jobs[0]])[0].errors).toEqual([]);
   });
 
   it('combines PDFs, keeps original page references, and detects cross-file duplicates', async () => {

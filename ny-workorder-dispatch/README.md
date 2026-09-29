@@ -5,6 +5,7 @@ A Vercel compatible dispatcher app for **one or more bulk PDFs with one work ord
 ## What works
 
 - Multiple bulk PDF upload and editable WO number, street, city, state, ZIP fields; malformed and duplicate work-order numbers across files block routing. Further file selections append to the batch. Files can be removed individually; adding or removing resets address review and routes. Once any route has been emailed, start a new batch to select files again.
+- Rows with duplicate work-order numbers have **Remove duplicate**. The removed row stays visible in a restore list and is excluded from routing and packets. Restoring it recalculates duplicate and mixed-date checks. Confirm which copy is correct before removing one; original PDFs are never changed.
 - Dispatchers can correct a field in the review table and recheck just that address without repeating the entire batch lookup.
 - Blank pages are skipped while each order retains its source filename and original page number. The provided sample contains 10 work orders and a blank 11th page. Packets copy the original pages from the appropriate input PDF in the route's reviewed order.
 - Address checks through the public Census batch geocoder. Unit/floor stays on the original page but is removed from the lookup address.

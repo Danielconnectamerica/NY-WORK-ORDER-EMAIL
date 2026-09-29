@@ -21,6 +21,21 @@ export function parseWorkOrder(text, page) {
   return { page, id, street, street2, city, state, zip, originalAddress: { street, street2, city, state, zip }, appointment, originalRoute, errors, geo: null };
 }
 
+export function validateBatchJobs(jobs) {
+  const counts = new Map();
+  for (const j of jobs) if (j.id?.trim()) counts.set(j.id.trim(), (counts.get(j.id.trim()) || 0) + 1);
+  const dates = new Set(jobs.map(j => j.appointment?.split(' ')[0]).filter(Boolean));
+  return jobs.map(j => {
+    const errors = [];
+    if (!j.id?.trim()) errors.push('Missing work order number');
+    if (!j.street?.trim() || !j.city?.trim() || !j.zip?.trim() || !j.state?.trim()) errors.push('Incomplete service address');
+    if (j.state && j.state !== 'NY') errors.push('Outside NY');
+    if (j.id?.trim() && counts.get(j.id.trim()) > 1) errors.push('Duplicate work order number');
+    if (dates.size > 1) errors.push('Mixed appointment dates in upload');
+    return { ...j, errors };
+  });
+}
+
 function pageLines(items) {
   const lines = [];
   for (const item of items) {
@@ -53,16 +68,7 @@ export async function readPdf(file, progress = () => {}) {
     else jobs.push(parseWorkOrder(text, page));
     progress(page, pdf.numPages);
   }
-  const ids = new Map();
-  for (const job of jobs) {
-    if (job.id && ids.has(job.id)) {
-      job.errors.push('Duplicate work order number');
-      ids.get(job.id).errors.push('Duplicate work order number');
-    } else ids.set(job.id, job);
-  }
-  const dates = new Set(jobs.map(j => j.appointment.split(' ')[0]).filter(Boolean));
-  if (dates.size > 1) jobs.forEach(j => j.errors.push('Mixed appointment dates in upload'));
-  return { bytes, jobs, skippedPages, pageCount: pdf.numPages };
+  return { bytes, jobs: validateBatchJobs(jobs), skippedPages, pageCount: pdf.numPages };
 }
 
 export async function readPdfs(files, progress = () => {}) {
@@ -76,21 +82,11 @@ export async function readPdfs(files, progress = () => {}) {
     catch (error) { throw new Error(`${file.name}: ${error.message}`); }
     if (offset + result.pageCount > 500) throw new Error('Maximum 500 pages across all selected PDFs');
     sources.push(result.bytes);
-    jobs.push(...result.jobs.map(j => ({ ...j, page: offset + j.page, sourceIndex, sourcePage: j.page, sourceName: file.name,
-      errors: j.errors.filter(e => e !== 'Duplicate work order number' && e !== 'Mixed appointment dates in upload') })));
+    jobs.push(...result.jobs.map(j => ({ ...j, page: offset + j.page, sourceIndex, sourcePage: j.page, sourceName: file.name })));
     skippedPages.push(...result.skippedPages.map(page => `${file.name} page ${page}`));
     offset += result.pageCount;
   }
-  const ids = new Map();
-  for (const job of jobs) {
-    if (!job.id) continue;
-    if (!ids.has(job.id)) ids.set(job.id, []);
-    ids.get(job.id).push(job);
-  }
-  for (const group of ids.values()) if (group.length > 1) group.forEach(j => j.errors.push('Duplicate work order number'));
-  const dates = new Set(jobs.map(j => j.appointment.split(' ')[0]).filter(Boolean));
-  if (dates.size > 1) jobs.forEach(j => j.errors.push('Mixed appointment dates in upload'));
-  return { sources, jobs, skippedPages, pageCount: offset };
+  return { sources, jobs: validateBatchJobs(jobs), skippedPages, pageCount: offset };
 }
 
 export async function packet(sources, route) {

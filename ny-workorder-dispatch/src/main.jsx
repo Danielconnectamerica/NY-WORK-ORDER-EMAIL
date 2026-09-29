@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { readPdfs, packet, safeStreet } from './pdf.js';
+import { readPdfs, packet, safeStreet, validateBatchJobs } from './pdf.js';
 import { approximateMatrix, optimize, feasibleCounts, zipEstimate } from './routing.js';
 import './style.css';
 
@@ -9,6 +9,7 @@ function App() {
   const [files, setFiles] = useState([]);
   const [sources, setSources] = useState([]);
   const [jobs, setJobs] = useState([]);
+  const [excludedJobs, setExcludedJobs] = useState([]);
   const [installers, setInstallers] = useState([{ name: '', email: '' }]);
   const [routes, setRoutes] = useState([]);
   const [mode, setMode] = useState('approximate');
@@ -33,7 +34,7 @@ function App() {
   async function upload(input) {
     const selected = Array.from(input || []);
     if (!selected.length) return;
-    setBusy(true); setJobs([]); setSources([]); setFiles(selected); invalidate();
+    setBusy(true); setJobs([]); setExcludedJobs([]); setSources([]); setFiles(selected); invalidate();
     try {
       setStatus('Reading PDFs in this browser…');
       const result = await readPdfs(selected, (name, page, total, number, count) => setStatus(`Reading PDF ${number} of ${count}: ${name}, page ${page} of ${total}…`));
@@ -43,7 +44,7 @@ function App() {
     finally { setBusy(false); }
   }
   function clearBatch() {
-    setFiles([]); setSources([]); setJobs([]); invalidate();
+    setFiles([]); setSources([]); setJobs([]); setExcludedJobs([]); invalidate();
     setStatus('Choose one or more PDFs to start.');
   }
   function removeFile(index) {
@@ -52,20 +53,24 @@ function App() {
     else clearBatch();
   }
   function editJob(page, key, value) {
-    setJobs(old => {
-      const edited = old.map(j => j.page === page ? { ...j, [key]: value, geo: null } : j);
-      const ids = edited.map(j => j.id).filter(Boolean);
-      return edited.map(j => {
-        const errors = [];
-        if (!j.id) errors.push('Missing work order number');
-        if (!j.street || !j.city || !j.zip || !j.state) errors.push('Incomplete service address');
-        if (j.state && j.state !== 'NY') errors.push('Outside NY');
-        if (j.id && ids.filter(id => id === j.id).length > 1) errors.push('Duplicate work order number');
-        if (new Set(edited.map(x => x.appointment.split(' ')[0]).filter(Boolean)).size > 1) errors.push('Mixed appointment dates in upload');
-        return { ...j, errors };
-      });
-    });
+    setJobs(old => validateBatchJobs(old.map(j => j.page === page ? { ...j, [key]: value, geo: null } : j)));
     invalidate();
+  }
+  function excludeJob(page) {
+    const job = jobs.find(j => j.page === page);
+    if (!job || anySent) return;
+    setExcludedJobs(old => [...old, job]);
+    setJobs(old => validateBatchJobs(old.filter(j => j.page !== page)));
+    invalidate();
+    setStatus(`WO ${job.id || '(missing number)'} removed from this batch. Restore it below if needed.`);
+  }
+  function restoreJob(page) {
+    const job = excludedJobs.find(j => j.page === page);
+    if (!job || anySent) return;
+    setExcludedJobs(old => old.filter(j => j.page !== page));
+    setJobs(old => validateBatchJobs([...old, job].sort((a, b) => a.page - b.page)));
+    invalidate();
+    setStatus(`WO ${job.id || '(missing number)'} restored to this batch.`);
   }
   async function geocode(pages = null) {
     setBusy(true); invalidate();
@@ -177,7 +182,7 @@ function App() {
     <header><div><span className="eyebrow">DISPATCH WORKSPACE</span><h1>New York work order router</h1><p>Upload one or more PDFs. Check each address. Build installer packets in stop order.</p></div><span className="pill">Local PDF processing</span></header>
     <section className="panel"><h2>1. Upload work orders</h2><p>Choose PDFs together or add them one at a time. Each PDF can contain multiple work orders, one per page. Adding or removing a file restarts address review; the files stay in this browser until you close the tab.</p><input aria-label="Add PDF files" type="file" accept="application/pdf" multiple disabled={busy || anySent} onChange={e => { if (e.target.files.length) upload([...files, ...Array.from(e.target.files)]); e.target.value = ''; }}/>{files.length > 0 && <><strong>{files.length} PDF{files.length === 1 ? '' : 's'} · {jobs.length} work orders</strong><ul className="file-list">{files.map((f, i) => <li key={`${i}-${f.name}`}>{f.name} <button className="quiet compact" disabled={busy || anySent} onClick={() => removeFile(i)} aria-label={`Remove ${f.name}`}>Remove</button></li>)}</ul><button className="quiet" disabled={busy} onClick={clearBatch}>Start new batch</button></>}</section>
     <section className="panel"><h2>2. Review addresses</h2><p>Address matching sends street addresses to the U.S. Census service; original PDF pages are not sent.</p>
-      {jobs.length > 0 && <><div className="scroll"><table><thead><tr><th>File / Page / WO</th><th>Street</th><th>City</th><th>State</th><th>ZIP</th><th>Address check</th></tr></thead><tbody>{jobs.map(j => <tr key={j.page}><td><small className="source-name" title={j.sourceName}>{j.sourceName}</small>Page {j.sourcePage ?? j.page}<br/><input className="short" aria-label={`Work order page ${j.page}`} value={j.id} onChange={e => editJob(j.page, 'id', e.target.value)}/></td><td><input aria-label={`Street page ${j.page}`} value={j.street} onChange={e => editJob(j.page, 'street', e.target.value)}/></td><td><input aria-label={`City page ${j.page}`} value={j.city} onChange={e => editJob(j.page, 'city', e.target.value)}/></td><td><input className="state" aria-label={`State page ${j.page}`} value={j.state} onChange={e => editJob(j.page, 'state', e.target.value.toUpperCase())}/></td><td><input className="zip" aria-label={`ZIP page ${j.page}`} value={j.zip} onChange={e => editJob(j.page, 'zip', e.target.value)}/></td><td className={j.errors.length || (j.geo && j.geo.match !== 'Match') ? 'warn' : 'good'}>{j.errors.join('; ') || (j.geo ? j.geo.match === 'Match' ? `Matched: ${j.geo.matchedAddress}` : j.geo.match === 'Zip_Estimate' || j.geo.match === 'Manual' ? j.geo.matchedAddress : 'No exact match — edit and retry' : 'Not checked')}{j.geo?.match !== 'Match' && <div className="pin-tools"><button className="quiet" disabled={busy || !j.street || !j.city || j.state !== 'NY' || !/^\d{5}$/.test(j.zip)} onClick={() => geocode([j.page])}>Check this address</button>{j.geo?.match !== 'Zip_Estimate' && zipEstimate(jobs, j.zip) && <button className="quiet" disabled={busy} onClick={() => useZipArea(j.page)}>Use ZIP area</button>}<div className="pin-input"><input aria-label={`Latitude page ${j.page}`} placeholder="Latitude" inputMode="decimal" value={j.manualLat || ''} onChange={e => setJobs(old => old.map(x => x.page === j.page ? { ...x, manualLat: e.target.value } : x))}/><input aria-label={`Longitude page ${j.page}`} placeholder="Longitude" inputMode="decimal" value={j.manualLon || ''} onChange={e => setJobs(old => old.map(x => x.page === j.page ? { ...x, manualLon: e.target.value } : x))}/><button className="quiet" disabled={busy} onClick={() => setManualPin(j.page)}>Set dispatch pin</button></div><small>Use a verified location. ZIP area and manual pins require approval after routing.</small></div>}</td></tr>)}</tbody></table></div><button disabled={busy || hasErrors || jobs.some(j => !j.id || !j.street || !j.city || j.state !== 'NY' || !/^\d{5}$/.test(j.zip))} onClick={() => geocode()}>Match all addresses</button></>}
+      {jobs.length > 0 && <><div className="scroll"><table><thead><tr><th>File / Page / WO</th><th>Street</th><th>City</th><th>State</th><th>ZIP</th><th>Address check</th></tr></thead><tbody>{jobs.map(j => <tr key={j.page}><td><small className="source-name" title={j.sourceName}>{j.sourceName}</small>Page {j.sourcePage ?? j.page}<br/><input className="short" aria-label={`Work order page ${j.page}`} value={j.id} onChange={e => editJob(j.page, 'id', e.target.value)}/>{j.errors.includes('Duplicate work order number') && <button className="quiet compact remove-duplicate" disabled={busy || anySent} onClick={() => excludeJob(j.page)}>Remove duplicate</button>}</td><td><input aria-label={`Street page ${j.page}`} value={j.street} onChange={e => editJob(j.page, 'street', e.target.value)}/></td><td><input aria-label={`City page ${j.page}`} value={j.city} onChange={e => editJob(j.page, 'city', e.target.value)}/></td><td><input className="state" aria-label={`State page ${j.page}`} value={j.state} onChange={e => editJob(j.page, 'state', e.target.value.toUpperCase())}/></td><td><input className="zip" aria-label={`ZIP page ${j.page}`} value={j.zip} onChange={e => editJob(j.page, 'zip', e.target.value)}/></td><td className={j.errors.length || (j.geo && j.geo.match !== 'Match') ? 'warn' : 'good'}>{j.errors.join('; ') || (j.geo ? j.geo.match === 'Match' ? `Matched: ${j.geo.matchedAddress}` : j.geo.match === 'Zip_Estimate' || j.geo.match === 'Manual' ? j.geo.matchedAddress : 'No exact match — edit and retry' : 'Not checked')}{j.geo?.match !== 'Match' && <div className="pin-tools"><button className="quiet" disabled={busy || !j.street || !j.city || j.state !== 'NY' || !/^\d{5}$/.test(j.zip)} onClick={() => geocode([j.page])}>Check this address</button>{j.geo?.match !== 'Zip_Estimate' && zipEstimate(jobs, j.zip) && <button className="quiet" disabled={busy} onClick={() => useZipArea(j.page)}>Use ZIP area</button>}<div className="pin-input"><input aria-label={`Latitude page ${j.page}`} placeholder="Latitude" inputMode="decimal" value={j.manualLat || ''} onChange={e => setJobs(old => old.map(x => x.page === j.page ? { ...x, manualLat: e.target.value } : x))}/><input aria-label={`Longitude page ${j.page}`} placeholder="Longitude" inputMode="decimal" value={j.manualLon || ''} onChange={e => setJobs(old => old.map(x => x.page === j.page ? { ...x, manualLon: e.target.value } : x))}/><button className="quiet" disabled={busy} onClick={() => setManualPin(j.page)}>Set dispatch pin</button></div><small>Use a verified location. ZIP area and manual pins require approval after routing.</small></div>}</td></tr>)}</tbody></table></div>{excludedJobs.length > 0 && <div className="excluded"><strong>Removed from this batch ({excludedJobs.length})</strong><ul>{excludedJobs.map(j => <li key={j.page}>WO {j.id || '(missing number)'} · {j.sourceName} page {j.sourcePage ?? j.page} <button className="quiet compact" disabled={busy || anySent} onClick={() => restoreJob(j.page)}>Restore</button></li>)}</ul></div>}<button disabled={busy || hasErrors || jobs.some(j => !j.id || !j.street || !j.city || j.state !== 'NY' || !/^\d{5}$/.test(j.zip))} onClick={() => geocode()}>Match all addresses</button></>}
     </section>
     <section className="panel"><h2>3. Assign installers</h2><p>Enter installer names to test routes. Company email is needed only when sending packets. Strict dispatch requires 14–16 stops per route.</p>{installers.map((x, i) => <div className="installer" key={i}><input aria-label={`Installer ${i + 1} name`} placeholder="Installer name" value={x.name} onChange={e => { setInstallers(old => old.map((y, k) => k === i ? { ...y, name: e.target.value } : y)); invalidate(); }}/><input aria-label={`Installer ${i + 1} email`} type="email" placeholder="installer@company.com (optional for testing)" value={x.email} onChange={e => { setInstallers(old => old.map((y, k) => k === i ? { ...y, email: e.target.value } : y)); invalidate(); }}/><button className="quiet" disabled={installers.length === 1} onClick={() => { setInstallers(old => old.filter((_, k) => k !== i)); invalidate(); }}>Remove</button></div>)}<button className="quiet" onClick={() => { setInstallers(old => [...old, { name: '', email: '' }]); invalidate(); }}>+ Add installer</button>
       <label>Dispatcher password (only for configured road routing or email)<input type="password" autoComplete="off" value={password} onChange={e => setPassword(e.target.value)} placeholder="Leave blank for approximate route testing"/></label>
